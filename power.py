@@ -1,9 +1,20 @@
 import time
+import logging
 from functools import partial
+from datetime import datetime
 
 import requests
+from astral import LocationInfo
+from astral.sun import sun
 
 from config import API_KEY, SITE_ID
+
+LOG = logging.getLogger('solar-lights')
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    level=logging.INFO
+)
 
 RENDER_MODE = 'html'
 
@@ -12,6 +23,7 @@ CAPACITY = 2.97  # kWp - capacity of the PV system installed
 MAX_IDEAL_POWER = 2.  # kW - daily usage at SITE_ID
 
 SOLAREDGE_SITE_API = f"https://monitoringapi.solaredge.com/site/{SITE_ID}/"
+API_QUERY_LIMIT = 300
 
 
 def get_live_power_with_status():
@@ -148,11 +160,38 @@ def get_production_percent_pixels(power: dict, multi=False) -> list:
     return result
 
 
+def get_city():
+    """Return the PV place."""
+    return LocationInfo(
+        "St. Helier", "Jersey", "Europe/London", 49.1811528, -2.1226525
+    )
+
+
+def get_sun_params():
+    """Get sun params for location."""
+    city = get_city()
+    sun_params = sun(city.observer, datetime.now())
+    return sun_params
+
+
+def get_daylight_seconds():
+    """Return number of seconds of daylight."""
+    sun_params = get_sun_params()
+    return (sun_params['sunset'] - sun_params['sunrise']).total_seconds()
+
+
 def get_consumption_percent_pixel(power: dict) -> list:
     """Return colour for how 'bad' consumption is relative to... avg?..."""
     cons = power['consumption']
     pct = cons / MAX_IDEAL_POWER
     return [round(255. * pct), 0, 0]
+
+
+def is_daylight():
+    """Return true if it is daylight."""
+    sun_params = get_sun_params()
+    now = get_city().tzinfo.localize(datetime.now())
+    return sun_params['sunset'] > now > sun_params['sunrise']
 
 
 if __name__ == '__main__':
@@ -163,6 +202,7 @@ if __name__ == '__main__':
 
     while True:
         power = get_live_power_with_status()
+        LOG.info(power)
         pixels = {}
 
         for pixel in get_production_percent_pixels(power, multi=True):
@@ -172,6 +212,15 @@ if __name__ == '__main__':
         pixels[len(pixels)] = get_consumption_percent_pixel(power)
 
         render_mode(pixels)
-        print(pixels)
-        print(power)
-        time.sleep(300)
+
+        light_secs = get_daylight_seconds()
+        dark_secs = 60 * 60 * 24 - light_secs
+        refresh_day = int(light_secs / (API_QUERY_LIMIT * 0.85))
+        refresh_night = int(dark_secs / (API_QUERY_LIMIT * 0.25))
+
+        if is_daylight():
+            refresh = refresh_day
+        else:
+            refresh = refresh_night
+        LOG.info(f'Refresh in {refresh} seconds...')
+        time.sleep(refresh)
