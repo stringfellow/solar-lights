@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import requests
 from astral import LocationInfo
 from astral.sun import sun
+from blinkt import set_pixel, clear, show
 
 from config import API_KEY, SITE_ID
 
@@ -15,7 +16,7 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-RENDER_MODE = 'html'
+RENDER_MODE = 'blinkt'
 
 
 IMPORT_COLOUR = [255, 0, 0]  # Bright RED  (worst is import!)
@@ -122,7 +123,11 @@ def render_with_html(pixels: dict):
 
 def render_with_blinkt(pixels: dict):
     """Use the blink API to render the lights."""
-    raise NotImplementedError("Use html.")
+    clear()
+    for ix in range(len(pixels)):
+        set_pixel(ix, *pixels[ix])
+    show()
+    render_with_html(pixels)
 
 
 def get_indicator_pixel(power: dict):
@@ -221,26 +226,32 @@ if __name__ == '__main__':
         render_mode = render_with_html
 
     while True:
-        power = get_live_power_with_status()
-        LOG.info(power)
-        pixels = {}
+        try:
+            power = get_live_power_with_status()
+            LOG.info(power)
+            pixels = {}
 
-        for pixel in get_production_percent_pixels(power, multi=True):
-            pixels[len(pixels)] = pixel
-        pixels[len(pixels)] = get_indicator_pixel(power)
-        pixels[len(pixels)] = get_tilt_pixel(power)
-        pixels[len(pixels)] = get_consumption_percent_pixel(power)
+            for pixel in get_production_percent_pixels(power, multi=True):
+                pixels[len(pixels)] = pixel
+            pixels[len(pixels)] = get_indicator_pixel(power)
+            pixels[len(pixels)] = get_tilt_pixel(power)
+            pixels[len(pixels)] = get_consumption_percent_pixel(power)
 
-        render_mode(pixels)
+            render_mode(pixels)
 
-        light_secs = get_daylight_seconds()
-        dark_secs = 60 * 60 * 24 - light_secs
-        refresh_day = int(light_secs / (API_QUERY_LIMIT * 0.85))
-        refresh_night = int(dark_secs / (API_QUERY_LIMIT * 0.15))
+            light_secs = get_daylight_seconds()
+            dark_secs = 60 * 60 * 24 - light_secs
+            day_portion = int(API_QUERY_LIMIT * 0.95)
+            night_portion = API_QUERY_LIMIT - day_portion - 1  # -1 for safety!
+            refresh_day = int(light_secs / day_portion)
+            refresh_night = int(dark_secs / night_portion)
 
-        if is_daylight():
-            refresh = refresh_day
-        else:
-            refresh = refresh_night
-        LOG.info(f'Refresh in {refresh} seconds...')
-        time.sleep(refresh)
+            if is_daylight():
+                refresh = refresh_day
+            else:
+                refresh = refresh_night
+            LOG.info(f'Refresh in {refresh} seconds...')
+            time.sleep(refresh)
+        except requests.exceptions.ConnectionError:
+            LOG.exception('Retrying in 5s after connection exception...')
+            time.sleep(5)
