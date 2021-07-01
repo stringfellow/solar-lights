@@ -1,7 +1,6 @@
 import time
 import logging
-from functools import partial
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import requests
 from astral import LocationInfo
@@ -18,12 +17,17 @@ logging.basicConfig(
 
 RENDER_MODE = 'html'
 
+
+IMPORT_COLOUR = [255, 0, 0]  # Bright RED  (worst is import!)
+EXPORT_COLOUR = [0, 0, 255]  # Bright BLUE
+NEUTRAL_COLOUR = [0, 255, 0]  # Bright GREEN  (best is self-consumption)
+
 # Get the following from the API?
 CAPACITY = 2.97  # kWp - capacity of the PV system installed
 MAX_IDEAL_POWER = 2.  # kW - daily usage at SITE_ID
 
 SOLAREDGE_SITE_API = f"https://monitoringapi.solaredge.com/site/{SITE_ID}/"
-API_QUERY_LIMIT = 300
+API_QUERY_LIMIT = 250  # 300
 
 
 def get_live_power_with_status():
@@ -77,6 +81,22 @@ def get_live_power_with_status():
         return result
 
 
+def get_day_hourly_summary():
+    """Get the summary of the day (up to now) per-hour."""
+    url = f"{SOLAREDGE_SITE_API}energyDetails.json"
+    params = {
+        'api_key': API_KEY,
+        'startTime': datetime.now().strftime('%Y-%m-%d%%2000:00:00'),
+        'endTime': (
+            datetime.now() + timedelta(hours=1)
+        ).strftime('%Y-%m-%d%%20%H:00:00'),
+        'timeUnit': 'HOUR',
+    }
+    response = requests.get(url, params=params)
+    import ipdb; ipdb.set_trace()
+    print(response)
+
+
 def render_with_html(pixels: dict):
     """Use HTML to render the lights."""
     pixel_markup = ""
@@ -108,9 +128,9 @@ def render_with_blinkt(pixels: dict):
 def get_indicator_pixel(power: dict):
     """Return pixel colour for "trinary" directional indicator."""
     return {
-        'import': [255, 0, 0],
-        'export': [0, 255, 0],
-        'neutral': [0, 0, 255]
+        'import': IMPORT_COLOUR,
+        'export': EXPORT_COLOUR,
+        'neutral': NEUTRAL_COLOUR,
     }[power['direction']]
 
 
@@ -120,9 +140,9 @@ def get_tilt_pixel(power: dict):
     cons = power['consumption']
     prod = power['production']
 
-    all_imp = [255, 0, 0]
-    all_exp = [0, 255, 0]
-    all_cons = [0, 0, 255]
+    all_imp = IMPORT_COLOUR
+    all_exp = EXPORT_COLOUR
+    all_cons = NEUTRAL_COLOUR
     pct = grid / cons
 
     c1 = all_cons
@@ -216,7 +236,7 @@ if __name__ == '__main__':
         light_secs = get_daylight_seconds()
         dark_secs = 60 * 60 * 24 - light_secs
         refresh_day = int(light_secs / (API_QUERY_LIMIT * 0.85))
-        refresh_night = int(dark_secs / (API_QUERY_LIMIT * 0.25))
+        refresh_night = int(dark_secs / (API_QUERY_LIMIT * 0.15))
 
         if is_daylight():
             refresh = refresh_day
