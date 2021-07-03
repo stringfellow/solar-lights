@@ -1,11 +1,12 @@
-import time
 import logging
+import time
+import random
 from datetime import datetime, timedelta
+from functools import partial
 
 import requests
 from astral import LocationInfo
 from astral.sun import sun
-from blinkt import set_pixel, clear, show
 
 from config import API_KEY, SITE_ID
 
@@ -16,8 +17,6 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-RENDER_MODE = 'blinkt'
-
 
 IMPORT_COLOUR = [255, 0, 0]  # Bright RED  (worst is import!)
 EXPORT_COLOUR = [0, 0, 255]  # Bright BLUE
@@ -25,61 +24,20 @@ NEUTRAL_COLOUR = [0, 255, 0]  # Bright GREEN  (best is self-consumption)
 
 # Get the following from the API?
 CAPACITY = 2.97  # kWp - capacity of the PV system installed
-MAX_IDEAL_POWER = 2.  # kW - daily usage at SITE_ID
+MAX_IDEAL_POWER = 3.  # kW - daily usage at SITE_ID
 
 SOLAREDGE_SITE_API = f"https://monitoringapi.solaredge.com/site/{SITE_ID}/"
-API_QUERY_LIMIT = 250  # 300
+API_QUERY_LIMIT = (60 * 60 * 24) / 5
+
+REFRESH_RATE_SECS = 1
 
 
-def get_live_power_with_status():
-    """Get live power values from SolarEdge API.
+class DataMethodNotAvailable(Exception):
+    """Raised when data access failed."""
 
-    Response might look like:
 
-    {
-        'siteCurrentPowerFlow': {
-            'updateRefreshRate': 3,
-            'unit': 'kW',
-            'connections': [
-                # IMPORTING
-                {'from': 'PV', 'to': 'Load'},
-                {'from': 'GRID', 'to': 'Load'}
-                # EXPORTING (?)
-                {'from': 'PV', 'to': 'Load'},
-                {'from': 'Load', 'to': 'GRID'}
-            ],
-            'GRID': {'status': 'Active', 'currentPower': 2.22},
-            'LOAD': {'status': 'Active', 'currentPower': 3.23},
-            'PV': {'status': 'Active', 'currentPower': 1.01}
-        }
-    }
-    """
-    url = f"{SOLAREDGE_SITE_API}currentPowerFlow.json?api_key={API_KEY}"
-    response = requests.get(url)
-    result = {
-        'production': None,
-        'consumption': None,
-        'import': None,
-        'export': None,
-    }
-    if response.status_code == 200:
-        packet = response.json()['siteCurrentPowerFlow']
-        production = packet['PV']['currentPower']
-        consumption = packet['LOAD']['currentPower']
-        grid = packet['GRID']['currentPower']
-
-        result['production'] = production
-        result['consumption'] = consumption
-
-        direction = 'neutral'
-        if production > consumption:
-            direction = 'export'
-        elif production < consumption:
-            direction = 'import'
-        result['direction'] = direction
-        result['grid'] = grid
-        result[direction] = grid
-        return result
+class RenderMethodFailed(Exception):
+    """Raised when render fails for some reason."""
 
 
 def get_day_hourly_summary():
@@ -98,160 +56,390 @@ def get_day_hourly_summary():
     print(response)
 
 
-def render_with_html(pixels: dict):
-    """Use HTML to render the lights."""
-    pixel_markup = ""
-    prop = int(100. / len(pixels)) - 2
-    for ix in range(len(pixels)):
-        pixel_markup += (
-            '<div style="background-color: rgb(' +
-            ', '.join([str(col) for col in pixels[ix]]) +
-            '); display: inline-block; ' +
-            f'width: {prop}%; height: {prop}%; ' +
-            'border: solid #333 1px;"></div>'
-        )
 
-    with open('lights.html', 'w') as fp:
-        fp.write("""
-        <html><head></head>
-        <body style="background-color: black;">
-        <script>
-        window.setTimeout(function(){window.location=location.href}, 10000);
-        </script>
-        """ + pixel_markup + "</body></html>")
+class SolarLights:
+    """Manage the lights output depending on production/consumption."""
 
+    PIXELS_AVAILABLE = 8
+    DARK_PIXEL = [0, 0, 0]
+    DEFAULT_BRIGHTNESS = 0.2
 
-def render_with_blinkt(pixels: dict):
-    """Use the blink API to render the lights."""
-    clear()
-    for ix in range(len(pixels)):
-        set_pixel(ix, *pixels[ix])
-    show()
-    render_with_html(pixels)
+    def __init__(self, with_blinkt=True, with_pygame=False):
+        """Set up."""
+        self._pixels = {}
+        self._brightness = self.DEFAULT_BRIGHTNESS
+        self._city = None
+        self._sun_params = None
+        self._next_update = None
+        self._with_blink = with_blinkt
+        self._with_pygame = with_pygame
 
+    @property
+    def pixels(self):
+        """Return pixel array."""
+        return [
+            self._pixels[ix]
+            if ix in self._pixels
+            else self.DARK_PIXEL
+            for ix in range(8)
+        ]
 
-def get_indicator_pixel(power: dict):
-    """Return pixel colour for "trinary" directional indicator."""
-    return {
-        'import': IMPORT_COLOUR,
-        'export': EXPORT_COLOUR,
-        'neutral': NEUTRAL_COLOUR,
-    }[power['direction']]
+    def set_pixels(self, pixels, first_index, clear=False):
+        """Add pixels to the pixel array starting at first_index."""
+        if clear:
+            self._pixels = {}
 
+        pixels.reverse()
+        if len(pixels) + len(self._pixels) <= self.PIXELS_AVAILABLE:
+            for ix in range(first_index, len(pixels)):
+                self._pixels[ix] = pixels.pop()
+        LOG.info(f"Pixels: {self._pixels}")
 
-def get_tilt_pixel(power: dict):
-    """Return pixel colour for the "tilt" toward export/import/balance."""
-    grid = power['grid']
-    cons = power['consumption']
-    prod = power['production']
+    def get_pixels(self):
+        """Return a load of pixels to render."""
+        pixels = []
+        for method in [
+            partial(self.get_production_percent_pixels, multi=3),
+            self.get_indicator_pixels,
+            self.get_tilt_pixels,
+            partial(self.get_consumption_percent_pixels, multi=3),
+        ]:
+            pixels.extend(method())
+        LOG.info(f"Pixels: {pixels}")
+        return pixels
 
-    all_imp = IMPORT_COLOUR
-    all_exp = EXPORT_COLOUR
-    all_cons = NEUTRAL_COLOUR
-    pct = grid / cons
+    @property
+    def brightness(self):
+        """Get brightness."""
+        return self._brightness
 
-    c1 = all_cons
-    c2 = all_exp if prod > cons else all_imp
+    @property
+    def city(self):
+        """Return the PV place."""
+        if self._city is None:
+            self._city = LocationInfo(
+                "St. Helier", "Jersey", "Europe/London", 49.1811528, -2.1226525
+            )
+        return self._city
 
-    # a simple blend either toward import or export from perfect pv consumption
-    colour = [
-        round((1 - pct) * c1[0] + pct * c2[0]),
-        round((1 - pct) * c1[1] + pct * c2[1]),
-        round((1 - pct) * c1[2] + pct * c2[2])
-    ]
-    return colour
+    @property
+    def sun_params(self):
+        """Return sun params for this place."""
+        if self._sun_params is None:
+            self._sun_params = sun(self.city.observer, datetime.now())
+        return self._sun_params
 
+    def get_daylight_seconds(self):
+        """Return number of seconds of daylight."""
+        return (
+            self.sun_params['sunset'] - self.sun_params['sunrise']
+        ).total_seconds()
 
-def get_production_percent_pixels(power: dict, multi=False) -> list:
-    """Return colour for how 'well' the system is doing relative to capacity."""
-    prod = power['production']
-    pct = prod / CAPACITY  # 0
-    result = []
-    if multi:
-        pixel_n = 3.  # how many pixels to spread over
-        pix_pct = 1 / pixel_n
+    def is_daylight(self):
+        """Return true if it is daylight."""
+        now = self.city.tzinfo.localize(datetime.now())
+        return self.sun_params['sunset'] > now > self.sun_params['sunrise']
 
-        for _ in range(int(pixel_n)):
+    def update_power_with_status(self, power_dict):
+        """Add status to the power_dict."""
+        direction = 'neutral'
+        if power_dict['production'] > power_dict['consumption']:
+            direction = 'export'
+        elif power_dict['production'] < power_dict['consumption']:
+            direction = 'import'
+        power_dict['direction'] = direction
+
+    def get_modbus_power_with_status(self):
+        """Get data from inverter...?."""
+        raise DataMethodNotAvailable("How can we modbus?")
+
+    def get_solaredge_power_with_status(self):
+        """Get live power values from SolarEdge API.
+
+        Response might look like:
+
+        {
+            'siteCurrentPowerFlow': {
+                'updateRefreshRate': 3,
+                'unit': 'kW',
+                'connections': [
+                    # IMPORTING
+                    {'from': 'PV', 'to': 'Load'},
+                    {'from': 'GRID', 'to': 'Load'}
+                    # EXPORTING (?)
+                    {'from': 'PV', 'to': 'Load'},
+                    {'from': 'Load', 'to': 'GRID'}
+                ],
+                'GRID': {'status': 'Active', 'currentPower': 2.22},
+                'LOAD': {'status': 'Active', 'currentPower': 3.23},
+                'PV': {'status': 'Active', 'currentPower': 1.01}
+            }
+        }
+        """
+        try:
+            url = f"{SOLAREDGE_SITE_API}currentPowerFlow.json?api_key={API_KEY}"
+            response = requests.get(url)
+            result = {
+                'production': None,
+                'consumption': None,
+                'import': None,
+                'export': None,
+            }
+            if response.status_code == 200:
+                packet = response.json()['siteCurrentPowerFlow']
+                production = packet['PV']['currentPower']
+                consumption = packet['LOAD']['currentPower']
+                grid = packet['GRID']['currentPower']
+
+                result['production'] = production
+                result['consumption'] = consumption
+
+                self.update_power_with_status(result)
+
+                result['grid'] = grid
+                result[result['direction']] = grid
+
+                return result
+            else:
+                raise DataMethodNotAvailable(
+                    f"SolarEdge API returned {response.status_code} status."
+                )
+        except requests.exceptions.ConnectionError:
+            raise DataMethodNotAvailable("SolarEdge API not reachable.")
+
+    def get_static_power_from_csv(self):
+        """Get power from CSV file."""
+        with open('data.csv', 'r') as fp:
+            lines = fp.readlines()
+            keys = lines[0].strip().split(',')
+            vals = [float(val.strip()) for val in lines[1].split(',')]
+            data = dict(zip(keys, vals))
+            return self.get_mock_power_with_status(**data)
+
+    def get_mock_power_with_status(self, prod=None, cons=None):
+        """Just make something up."""
+        prod = prod or random.randint(0, int(10 * CAPACITY)) / 10.
+        cons = cons or (random.randint(0, 10 * 5) / 10.) + 0.1
+        result = {
+            'production': prod,
+            'consumption': cons,
+            'import': None if prod > cons else cons - prod,
+            'export': None if prod < cons else prod - cons,
+        }
+        grid = result['import'] or result['export']
+
+        self.update_power_with_status(result)
+
+        result['grid'] = grid
+        result[result['direction']] = grid
+        return result
+
+    def get_live_power_with_status(self):
+        """Get power/status dict."""
+        result = None
+        methods = [
+            self.get_modbus_power_with_status,
+            self.get_solaredge_power_with_status,
+            self.get_static_power_from_csv,
+            self.get_mock_power_with_status,
+        ]
+        methods.reverse()
+        while result is None and len(methods):
+            method = methods.pop()
+            try:
+                result = method()
+            except DataMethodNotAvailable:
+                continue
+        LOG.debug("Data updated!")
+        return result
+
+    def set_next_update(self):
+        """Figure out when we can next update, set it."""
+        if self._next_update and self._next_update > datetime.utcnow():
+            return
+
+        if self._next_update is None:
+            self._next_update = datetime.utcnow().replace(microsecond=0)
+            return
+
+        light_secs = self.get_daylight_seconds()
+        dark_secs = 60 * 60 * 24 - light_secs
+        day_portion = int(API_QUERY_LIMIT * 0.95)
+        night_portion = API_QUERY_LIMIT - day_portion - 1  # -1 for safety!
+        refresh_day = int(light_secs / day_portion)
+        refresh_night = int(dark_secs / night_portion)
+
+        if self.is_daylight():
+            refresh = refresh_day
+        else:
+            refresh = refresh_night
+        self._next_update = (
+            datetime.utcnow() + timedelta(seconds=refresh)
+        ).replace(microsecond=0)
+        LOG.info(f'Refresh in {refresh} seconds at {self._next_update}...')
+
+    def update_data(self):
+        """If the time is right, update the data."""
+        if self._next_update is None:
+            return
+
+        if self._next_update <= datetime.utcnow():
+            LOG.debug("Updating data...")
+            self._data = self.get_live_power_with_status()
+            LOG.info(f"Data: {self._data}")
+
+    def render_with_html(self):
+        """Use HTML to render the lights."""
+        pixel_markup = ""
+        prop = int(100. / len(self.pixels)) - 2
+        for ix in range(len(self.pixels)):
+            pixel_markup += (
+                '<div style="background-color: rgb(' +
+                ', '.join([str(col) for col in self.pixels[ix]]) +
+                '); display: inline-block; ' +
+                f'width: {prop}%; height: {prop}%; ' +
+                'border: solid #333 1px;"></div>'
+            )
+
+        with open('lights.html', 'w') as fp:
+            fp.write("""
+            <html><head></head>
+            <body style="background-color: black; color: white;">
+            <script>
+            window.setTimeout(function(){window.location=location.href}, """ +
+            str(REFRESH_RATE_SECS * 1000) + """);
+            </script>
+            """ + pixel_markup +
+            f"<p>Date: {datetime.utcnow().isoformat()}</p>" +
+            f"<p>Data: {self._data}</p>" +
+            f"<p>Pixels: {self.pixels}</p>"
+            "</body></html>")
+
+    def render_with_blinkt(self):
+        """Use the blink API to render the lights."""
+        if not self._with_blink:
+            return
+
+        try:
+            from blinkt import clear, set_pixel, show
+            clear()
+            for ix in range(len(self.pixels)):
+                set_pixel(ix, *self.pixels[ix])
+            show()
+        except ImportError:
+            raise RenderMethodFailed("No blinkt!")
+
+    def render_with_pygame(self):
+        """Use pygame to simulate hardware."""
+        if not self._with_pygame:
+            return
+
+    def render(self):
+        """Render somehow (HTML, Blinkt, etc.)."""
+        for method in [
+            self.render_with_html,
+            self.render_with_blinkt,
+            self.render_with_pygame,
+        ]:
+            try:
+                method()
+            except RenderMethodFailed:
+                LOG.error(f"Method {method.__name__} failed.")
+        LOG.debug("Rendered!")
+
+    def get_indicator_pixels(self):
+        """Return pixel colour for "trinary" directional indicator."""
+        return [
+            {
+                'import': IMPORT_COLOUR,
+                'export': EXPORT_COLOUR,
+                'neutral': NEUTRAL_COLOUR,
+            }[self._data['direction']]
+        ]
+
+    def get_tilt_pixels(self):
+        """Return pixel colour for the "tilt" toward export/import/balance."""
+        grid = self._data['grid']
+        cons = self._data['consumption']
+        prod = self._data['production']
+
+        all_imp = IMPORT_COLOUR
+        all_exp = EXPORT_COLOUR
+        all_cons = NEUTRAL_COLOUR
+        pct = grid / cons
+
+        c1 = all_cons
+        c2 = all_exp if prod > cons else all_imp
+
+        # a simple blend either toward import or export from perfect pv consumption
+        colour = [
+            round((1 - pct) * c1[0] + pct * c2[0]),
+            round((1 - pct) * c1[1] + pct * c2[1]),
+            round((1 - pct) * c1[2] + pct * c2[2])
+        ]
+        return [colour]
+
+    def spread_pixels(self, n_pixels: int, full_pixel: list, pct: float):
+        """Spread the full_pixel over n_pixels."""
+        result = []
+        pix_pct = 1 / n_pixels
+
+        for _ in range(int(n_pixels)):
             if pct >= pix_pct:
-                result.append([255, 255, 255])
+                result.append(full_pixel)
                 pct -= pix_pct
             elif pct > 0 and pct < pix_pct:
-                result.append([int(255. * (pct / pix_pct))] * 3)
+                result.append([
+                    int(float(full_pixel[ix]) * (pct / pix_pct))
+                    for ix in range(3)
+                ])
                 pct -= pct
             else:
                 result.append([0, 0, 0])
-    else:
-        result.append([round(255. * pct)] * 3)
-    return result
+        return result
 
+    def get_production_percent_pixels(self, multi: float=0) -> list:
+        """Return colour for how 'well' the system is doing relative to capacity."""
+        prod = self._data['production']
+        pct = prod / CAPACITY  # 0
+        result = []
+        if multi:
+            result = self.spread_pixels(multi, [255, 255, 255], pct)
+        else:
+            result.append([round(255. * pct)] * 3)
+        return result
 
-def get_city():
-    """Return the PV place."""
-    return LocationInfo(
-        "St. Helier", "Jersey", "Europe/London", 49.1811528, -2.1226525
-    )
+    def get_consumption_percent_pixels(self, multi: float=0) -> list:
+        """Return colour for how 'bad' consumption is relative to... avg?..."""
+        cons = self._data['consumption']
+        pct = cons / MAX_IDEAL_POWER
+        result = []
+        if multi:
+            result = self.spread_pixels(multi, [255, 0, 0], pct)
+        else:
+            result.append([round(255. * pct), 0, 0])
+        return reversed(result)
 
-
-def get_sun_params():
-    """Get sun params for location."""
-    city = get_city()
-    sun_params = sun(city.observer, datetime.now())
-    return sun_params
-
-
-def get_daylight_seconds():
-    """Return number of seconds of daylight."""
-    sun_params = get_sun_params()
-    return (sun_params['sunset'] - sun_params['sunrise']).total_seconds()
-
-
-def get_consumption_percent_pixel(power: dict) -> list:
-    """Return colour for how 'bad' consumption is relative to... avg?..."""
-    cons = power['consumption']
-    pct = cons / MAX_IDEAL_POWER
-    return [round(255. * pct), 0, 0]
-
-
-def is_daylight():
-    """Return true if it is daylight."""
-    sun_params = get_sun_params()
-    now = get_city().tzinfo.localize(datetime.now())
-    return sun_params['sunset'] > now > sun_params['sunrise']
+    def run(self):
+        """Start the process."""
+        try:
+            self.set_next_update()
+            while True:
+                self.update_data()
+                self.set_next_update()
+                self.set_pixels(self.get_pixels(), 0, clear=True)
+                self.render()
+                time.sleep(REFRESH_RATE_SECS)
+        except KeyboardInterrupt:
+            LOG.info("Keyboard interrupt, aborting.")
 
 
 if __name__ == '__main__':
-    if RENDER_MODE == 'blinkt':
-        render_mode = render_with_blinkt
-    else:
-        render_mode = render_with_html
+    # try:
+    controller = SolarLights(with_blinkt=False, with_pygame=True)
+    controller.run()
+    # except Exception as ex:
+    #     import ipdb; ipdb.set_trace()
+    #     print(ex)
 
-    while True:
-        try:
-            power = get_live_power_with_status()
-            LOG.info(power)
-            pixels = {}
 
-            for pixel in get_production_percent_pixels(power, multi=True):
-                pixels[len(pixels)] = pixel
-            pixels[len(pixels)] = get_indicator_pixel(power)
-            pixels[len(pixels)] = get_tilt_pixel(power)
-            pixels[len(pixels)] = get_consumption_percent_pixel(power)
-
-            render_mode(pixels)
-
-            light_secs = get_daylight_seconds()
-            dark_secs = 60 * 60 * 24 - light_secs
-            day_portion = int(API_QUERY_LIMIT * 0.95)
-            night_portion = API_QUERY_LIMIT - day_portion - 1  # -1 for safety!
-            refresh_day = int(light_secs / day_portion)
-            refresh_night = int(dark_secs / night_portion)
-
-            if is_daylight():
-                refresh = refresh_day
-            else:
-                refresh = refresh_night
-            LOG.info(f'Refresh in {refresh} seconds...')
-            time.sleep(refresh)
-        except requests.exceptions.ConnectionError:
-            LOG.exception('Retrying in 5s after connection exception...')
-            time.sleep(5)
