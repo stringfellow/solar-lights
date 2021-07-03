@@ -29,7 +29,7 @@ MAX_IDEAL_POWER = 3.  # kW - daily usage at SITE_ID
 SOLAREDGE_SITE_API = f"https://monitoringapi.solaredge.com/site/{SITE_ID}/"
 API_QUERY_LIMIT = (60 * 60 * 24) / 5
 
-REFRESH_RATE_SECS = 1
+REFRESH_RATE_SECS = 0.1
 
 
 class DataMethodNotAvailable(Exception):
@@ -73,6 +73,9 @@ class SolarLights:
         self._next_update = None
         self._with_blink = with_blinkt
         self._with_pygame = with_pygame
+        self._render_count = 0
+
+        self._pygame_display = None
 
     @property
     def pixels(self):
@@ -93,7 +96,6 @@ class SolarLights:
         if len(pixels) + len(self._pixels) <= self.PIXELS_AVAILABLE:
             for ix in range(first_index, len(pixels)):
                 self._pixels[ix] = pixels.pop()
-        LOG.info(f"Pixels: {self._pixels}")
 
     def get_pixels(self):
         """Return a load of pixels to render."""
@@ -105,7 +107,6 @@ class SolarLights:
             partial(self.get_consumption_percent_pixels, multi=3),
         ]:
             pixels.extend(method())
-        LOG.info(f"Pixels: {pixels}")
         return pixels
 
     @property
@@ -286,7 +287,7 @@ class SolarLights:
         if self._next_update <= datetime.utcnow():
             LOG.debug("Updating data...")
             self._data = self.get_live_power_with_status()
-            LOG.info(f"Data: {self._data}")
+            LOG.debug(f"Data: {self._data}")
 
     def render_with_html(self):
         """Use HTML to render the lights."""
@@ -307,7 +308,7 @@ class SolarLights:
             <body style="background-color: black; color: white;">
             <script>
             window.setTimeout(function(){window.location=location.href}, """ +
-            str(REFRESH_RATE_SECS * 1000) + """);
+            str(REFRESH_RATE_SECS * 5000) + """);
             </script>
             """ + pixel_markup +
             f"<p>Date: {datetime.utcnow().isoformat()}</p>" +
@@ -331,8 +332,38 @@ class SolarLights:
 
     def render_with_pygame(self):
         """Use pygame to simulate hardware."""
+        # try:
+        import pygame
+        if self._pygame_display is None:
+            pygame.init()
+            self._pygame_display = pygame.display.set_mode(
+                (500, 400), 0, 32
+            )
+        for ix, pixel in enumerate(self.pixels):
+            pygame.draw.rect(
+                self._pygame_display,
+                pixel,
+                (ix * 50, 0, 50, 50)
+            )
+        pygame.display.update()
+        # except Exception as ex:
+        #     import ipdb
+        #     raise RenderMethodFailed(f"Pygame... {ex}")
+
         if not self._with_pygame:
             return
+
+    @property
+    def flash_percent(self):
+        """Return percent of flash depending on render count."""
+        max_ = 15.
+        return (self._render_count % max_) / max_
+
+    @property
+    def pulse_percent(self):
+        """Return percent of pulse depending on render count."""
+        max_ = 127.
+        return (self._render_count % max_) / max_
 
     def render(self):
         """Render somehow (HTML, Blinkt, etc.)."""
@@ -345,16 +376,20 @@ class SolarLights:
                 method()
             except RenderMethodFailed:
                 LOG.error(f"Method {method.__name__} failed.")
+        self._render_count += 1
         LOG.debug("Rendered!")
 
     def get_indicator_pixels(self):
         """Return pixel colour for "trinary" directional indicator."""
+        pct = self.flash_percent
         return [
-            {
-                'import': IMPORT_COLOUR,
-                'export': EXPORT_COLOUR,
-                'neutral': NEUTRAL_COLOUR,
-            }[self._data['direction']]
+            [
+                int(val * pct) for val in {
+                    'import': IMPORT_COLOUR,
+                    'export': EXPORT_COLOUR,
+                    'neutral': NEUTRAL_COLOUR,
+                }[self._data['direction']]
+            ]
         ]
 
     def get_tilt_pixels(self):
@@ -403,6 +438,8 @@ class SolarLights:
         prod = self._data['production']
         pct = prod / CAPACITY  # 0
         result = []
+
+        pct = pct * self.pulse_percent
         if multi:
             result = self.spread_pixels(multi, [255, 255, 255], pct)
         else:
@@ -414,6 +451,7 @@ class SolarLights:
         cons = self._data['consumption']
         pct = cons / MAX_IDEAL_POWER
         result = []
+        pct = pct * self.pulse_percent
         if multi:
             result = self.spread_pixels(multi, [255, 0, 0], pct)
         else:
