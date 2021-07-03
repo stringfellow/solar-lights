@@ -27,7 +27,7 @@ CAPACITY = 2.97  # kWp - capacity of the PV system installed
 MAX_IDEAL_POWER = 3.  # kW - daily usage at SITE_ID
 
 SOLAREDGE_SITE_API = f"https://monitoringapi.solaredge.com/site/{SITE_ID}/"
-API_QUERY_LIMIT = (60 * 60 * 24) / 5
+API_QUERY_LIMIT = 300
 
 REFRESH_RATE_SECS = 0.1
 
