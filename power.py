@@ -322,7 +322,8 @@ class SolarLights:
             return
 
         try:
-            from blinkt import clear, set_pixel, show
+            from blinkt import clear, set_pixel, show, set_brightness
+            set_brightness(0.5)
             clear()
             for ix in range(len(self.pixels)):
                 set_pixel(ix, *self.pixels[ix])
@@ -440,7 +441,7 @@ class SolarLights:
 
         pct = pct * self.pulse_percent
         if multi:
-            result = self.spread_pixels(multi, [255, 255, 255], pct)
+            result = self.spread_pixels(multi, [128, 128, 128], pct)
         else:
             result.append([round(255. * pct)] * 3)
         return result
@@ -452,7 +453,7 @@ class SolarLights:
         result = []
         pct = pct * self.pulse_percent
         if multi:
-            result = self.spread_pixels(multi, [255, 0, 0], pct)
+            result = self.spread_pixels(multi, [128, 0, 0], pct)
         else:
             result.append([round(255. * pct), 0, 0])
         return reversed(result)
