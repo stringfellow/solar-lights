@@ -41,23 +41,17 @@ class RenderMethodFailed(Exception):
     """Raised when render fails for some reason."""
 
 
-
-
-
-
 class SolarLights:
     """Manage the lights output depending on production/consumption."""
 
     PIXELS_AVAILABLE = 8
     DARK_PIXEL = [0, 0, 0]
-    DEFAULT_BRIGHTNESS = 0.2
 
     def __init__(self, with_blinkt=True, with_pygame=False):
         """Set up."""
         self._data = None
         self._summary = None
         self._pixels = {}
-        self._brightness = self.DEFAULT_BRIGHTNESS
         self._city = None
         self._sun_params = None
         self._next_update = None
@@ -362,7 +356,7 @@ class SolarLights:
 
         try:
             from blinkt import clear, set_pixel, show, set_brightness
-            set_brightness(0.5 if self.is_daylight else 0.2)
+            set_brightness(0.5 if self.is_daylight else 0.1)
             clear()
             for ix in range(len(self.pixels)):
                 set_pixel(ix, *self.pixels[ix])
