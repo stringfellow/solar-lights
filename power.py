@@ -41,20 +41,7 @@ class RenderMethodFailed(Exception):
     """Raised when render fails for some reason."""
 
 
-def get_day_hourly_summary():
-    """Get the summary of the day (up to now) per-hour."""
-    url = f"{SOLAREDGE_SITE_API}energyDetails.json"
-    params = {
-        'api_key': API_KEY,
-        'startTime': datetime.now().strftime('%Y-%m-%d%%2000:00:00'),
-        'endTime': (
-            datetime.now() + timedelta(hours=1)
-        ).strftime('%Y-%m-%d%%20%H:00:00'),
-        'timeUnit': 'HOUR',
-    }
-    response = requests.get(url, params=params)
-    import ipdb; ipdb.set_trace()
-    print(response)
+
 
 
 
@@ -67,6 +54,8 @@ class SolarLights:
 
     def __init__(self, with_blinkt=True, with_pygame=False):
         """Set up."""
+        self._data = None
+        self._summary = None
         self._pixels = {}
         self._brightness = self.DEFAULT_BRIGHTNESS
         self._city = None
@@ -101,19 +90,23 @@ class SolarLights:
     def get_pixels(self):
         """Return a load of pixels to render."""
         pixels = []
-        for method in [
-            partial(self.get_production_percent_pixels, multi=3),
+        methods = []
+        if self.is_daylight:
+            methods.append(
+                partial(self.get_production_percent_pixels, multi=3),
+            )
+        else:
+            methods.append(
+                self.get_day_summary_pixels
+            )
+        methods.extend([
             self.get_indicator_pixels,
             self.get_tilt_pixels,
             partial(self.get_consumption_percent_pixels, multi=3),
-        ]:
+        ])
+        for method in methods:
             pixels.extend(method())
         return pixels
-
-    @property
-    def brightness(self):
-        """Get brightness."""
-        return self._brightness
 
     @property
     def city(self):
@@ -137,6 +130,7 @@ class SolarLights:
             self.sun_params['sunset'] - self.sun_params['sunrise']
         ).total_seconds()
 
+    @property
     def is_daylight(self):
         """Return true if it is daylight."""
         now = self.city.tzinfo.localize(datetime.now())
@@ -154,6 +148,41 @@ class SolarLights:
     def get_modbus_power_with_status(self):
         """Get data from inverter...?."""
         raise DataMethodNotAvailable("How can we modbus?")
+
+    def get_solaredge_day_summary(self):
+        """Get the summary of the day (up to now) from SolarEdge API."""
+        try:
+            url = f"{SOLAREDGE_SITE_API}energyDetails.json"
+            params = {
+                'api_key': API_KEY,
+                'startTime': datetime.now().strftime('%Y-%m-%d 00:00:00'),
+                'endTime': (
+                    datetime.now() + timedelta(hours=1)
+                ).strftime('%Y-%m-%d %H:00:00'),
+                'timeUnit': 'HOUR',
+            }
+            response = requests.get(url, params=params)
+            result = {}
+            if response.status_code == 200:
+                data = response.json()
+                meters = {
+                    meter['type']: meter['values']
+                    for meter in data['energyDetails']['meters']
+                }
+                for meter, values in meters.items():
+                    result[meter] = sum([
+                        hour.get('value', 0)
+                        for hour in values
+                    ])
+                return result
+            else:
+                raise DataMethodNotAvailable(
+                    f"SolarEdge API returned {response.status_code} status."
+                )
+        except requests.exceptions.ConnectionError:
+            raise DataMethodNotAvailable("SolarEdge API not reachable.")
+        except KeyError:
+            raise DataMethodNotAvailable("Unexpected response data.")
 
     def get_solaredge_power_with_status(self):
         """Get live power values from SolarEdge API.
@@ -267,11 +296,12 @@ class SolarLights:
         light_secs = self.get_daylight_seconds()
         dark_secs = 60 * 60 * 24 - light_secs
         day_portion = int(API_QUERY_LIMIT * 0.95)
-        night_portion = API_QUERY_LIMIT - day_portion - 1  # -1 for safety!
+        # Night portion is -2: one for Summary request, and one for safety...
+        night_portion = API_QUERY_LIMIT - day_portion - 2
         refresh_day = int(light_secs / day_portion)
         refresh_night = int(dark_secs / night_portion)
 
-        if self.is_daylight():
+        if self.is_daylight:
             refresh = refresh_day
         else:
             refresh = refresh_night
@@ -289,6 +319,14 @@ class SolarLights:
             LOG.debug("Updating data...")
             self._data = self.get_live_power_with_status()
             LOG.debug(f"Data: {self._data}")
+
+            if self.is_daylight:
+                self._summary = None
+            elif self._summary is None:
+                LOG.info("Getting summary data...")
+                # Only do this once so API request limit not reached...
+                self._summary = self.get_solaredge_day_summary()
+                LOG.info(f"Data: {self._summary}")
 
     def render_with_html(self):
         """Use HTML to render the lights."""
@@ -324,7 +362,7 @@ class SolarLights:
 
         try:
             from blinkt import clear, set_pixel, show, set_brightness
-            set_brightness(0.5)
+            set_brightness(0.5 if self.is_daylight else 0.2)
             clear()
             for ix in range(len(self.pixels)):
                 set_pixel(ix, *self.pixels[ix])
@@ -382,7 +420,7 @@ class SolarLights:
 
     def get_indicator_pixels(self):
         """Return pixel colour for "trinary" directional indicator."""
-        pct = self.flash_percent
+        pct = self.flash_percent if self.is_daylight else 1
         return [
             [
                 int(val * pct) for val in {
@@ -407,13 +445,16 @@ class SolarLights:
         c1 = all_cons
         c2 = all_exp if prod > cons else all_imp
 
-        # a simple blend either toward import or export from perfect pv consumption
+        return [self.blend_pixel(c1, c2, pct)]
+
+    def blend_pixel(self, c1, c2, pct):
+        """Simple blend from c1 to c2 by pct."""
         colour = [
             round((1 - pct) * c1[0] + pct * c2[0]),
             round((1 - pct) * c1[1] + pct * c2[1]),
             round((1 - pct) * c1[2] + pct * c2[2])
         ]
-        return [colour]
+        return colour
 
     def spread_pixels(self, n_pixels: int, full_pixel: list, pct: float):
         """Spread the full_pixel over n_pixels."""
@@ -458,6 +499,32 @@ class SolarLights:
         else:
             result.append([round(255. * pct), 0, 0])
         return reversed(result)
+
+    def get_day_summary_pixels(self):
+        """Summarise the day - more export or more self consumption?."""
+        if self._summary is None:
+            return [self.DARK_PIXEL] * 3
+
+        total_prod = self._summary['FeedIn'] + self._summary['SelfConsumption']
+        pct_self = self._summary['SelfConsumption'] / total_prod
+        pct_export = self._summary['FeedIn'] / total_prod
+
+        result = []
+        if pct_self > 0.33:
+            result.append(NEUTRAL_COLOUR)
+        if pct_self > 0.66:
+            result.append(NEUTRAL_COLOUR)
+
+        result.append(
+            self.blend_pixel(EXPORT_COLOUR, NEUTRAL_COLOUR, pct_self)
+        )
+
+        if pct_export > 0.33:
+            result.append(EXPORT_COLOUR)
+        if pct_export > 0.66:
+            result.append(EXPORT_COLOUR)
+
+        return result
 
     def run(self):
         """Start the process."""
