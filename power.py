@@ -1,3 +1,4 @@
+import argparse
 import logging
 import time
 import random
@@ -473,5 +474,20 @@ class SolarLights:
 
 
 if __name__ == '__main__':
-    controller = SolarLights()
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "-p", "--with-pygame", action="store_true",
+        default=False,
+        help="Do a render with Pygame"
+    )
+    parser.add_argument(
+        "-B", "--no-blinkt", action="store_true",
+        default=False,
+        help="Don't do a render with Blinkt"
+    )
+    args = parser.parse_args()
+    controller = SolarLights(
+        with_blinkt=not args.no_blinkt,
+        with_pygame=args.with_pygame
+    )
     controller.run()
