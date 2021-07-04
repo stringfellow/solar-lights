@@ -332,26 +332,25 @@ class SolarLights:
 
     def render_with_pygame(self):
         """Use pygame to simulate hardware."""
-        # try:
-        import pygame
-        if self._pygame_display is None:
-            pygame.init()
-            self._pygame_display = pygame.display.set_mode(
-                (500, 400), 0, 32
-            )
-        for ix, pixel in enumerate(self.pixels):
-            pygame.draw.rect(
-                self._pygame_display,
-                pixel,
-                (ix * 50, 0, 50, 50)
-            )
-        pygame.display.update()
-        # except Exception as ex:
-        #     import ipdb
-        #     raise RenderMethodFailed(f"Pygame... {ex}")
-
         if not self._with_pygame:
             return
+
+        try:
+            import pygame
+            if self._pygame_display is None:
+                pygame.init()
+                self._pygame_display = pygame.display.set_mode(
+                    (500, 400), 0, 32
+                )
+            for ix, pixel in enumerate(self.pixels):
+                pygame.draw.rect(
+                    self._pygame_display,
+                    pixel,
+                    (ix * 50, 0, 50, 50)
+                )
+            pygame.display.update()
+        except Exception as ex:
+            raise RenderMethodFailed(f"Pygame render failed... {ex}")
 
     @property
     def flash_percent(self):
@@ -473,11 +472,5 @@ class SolarLights:
 
 
 if __name__ == '__main__':
-    # try:
-    controller = SolarLights(with_blinkt=False, with_pygame=True)
+    controller = SolarLights()
     controller.run()
-    # except Exception as ex:
-    #     import ipdb; ipdb.set_trace()
-    #     print(ex)
-
-
