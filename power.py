@@ -234,12 +234,15 @@ class SolarLights:
 
     def get_static_power_from_csv(self):
         """Get power from CSV file."""
-        with open('data.csv', 'r') as fp:
-            lines = fp.readlines()
-            keys = lines[0].strip().split(',')
-            vals = [float(val.strip()) for val in lines[1].split(',')]
-            data = dict(zip(keys, vals))
-            return self.get_mock_power_with_status(**data)
+        try:
+            with open('data.csv', 'r') as fp:
+                lines = fp.readlines()
+                keys = lines[0].strip().split(',')
+                vals = [float(val.strip()) for val in lines[1].split(',')]
+                data = dict(zip(keys, vals))
+                return self.get_mock_power_with_status(**data)
+        except (FileNotFoundError, KeyError, IndexError):
+            raise DataMethodNotAvailable("Data file is not present or correct.")
 
     def get_mock_power_with_status(self, prod=None, cons=None):
         """Just make something up."""
@@ -479,7 +482,7 @@ class SolarLights:
         if multi:
             result = self.spread_pixels(multi, [128, 128, 128], pct)
         else:
-            result.append([round(255. * pct)] * 3)
+            result.append([round(128. * pct)] * 3)
         return result
 
     def get_consumption_percent_pixels(self, multi: float=0) -> list:
@@ -530,8 +533,9 @@ class SolarLights:
                 self.set_pixels(self.get_pixels(), 0, clear=True)
                 self.render()
                 time.sleep(REFRESH_RATE_SECS)
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, SystemExit):
             LOG.info("Keyboard interrupt, aborting.")
+            raise
 
 
 if __name__ == '__main__':
@@ -551,4 +555,11 @@ if __name__ == '__main__':
         with_blinkt=not args.no_blinkt,
         with_pygame=args.with_pygame
     )
-    controller.run()
+    interrupted = False
+    while not interrupted:
+        try:
+            controller.run()
+        except (KeyboardInterrupt, SystemExit):
+            interrupted = True
+        except:
+            LOG.exception("Exception occurred, retrying run loop.")
