@@ -359,8 +359,8 @@ class SolarLights:
 
         try:
             from blinkt import clear, set_pixel, show, set_brightness
-            set_brightness(0.5 if self.is_daylight else 0.1)
             clear()
+            set_brightness(0.5 if self.is_daylight else 0.1)
             for ix in range(len(self.pixels)):
                 set_pixel(ix, *self.pixels[ix])
             show()
@@ -534,8 +534,17 @@ class SolarLights:
                 self.render()
                 time.sleep(REFRESH_RATE_SECS)
         except (KeyboardInterrupt, SystemExit):
-            LOG.info("Keyboard interrupt, aborting.")
             raise
+
+    def cleanup(self):
+        """Clear any states..."""
+        if self._with_blink:
+            try:
+                from blinkt import clear, show
+                clear()
+                show()
+            except:
+                LOG.exception("Failed to cleanup Blinkt.")
 
 
 if __name__ == '__main__':
@@ -561,5 +570,7 @@ if __name__ == '__main__':
             controller.run()
         except (KeyboardInterrupt, SystemExit):
             interrupted = True
+            LOG.info("Keyboard interrupt/sys exit, aborting.")
+            controller.cleanup()
         except:
             LOG.exception("Exception occurred, retrying run loop.")
