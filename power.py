@@ -521,6 +521,7 @@ class SolarLights:
 
         while (calcd + pct_per_pix) <= 1:
             result.append(EXPORT_COLOUR)
+            calcd += pct_per_pix
 
         return result
 
@@ -531,7 +532,8 @@ class SolarLights:
             while True:
                 self.update_data()
                 self.set_next_update()
-                self.set_pixels(self.get_pixels(), 0, clear=True)
+                pixels = self.get_pixels()
+                self.set_pixels(pixels, 0, clear=True)
                 self.render()
                 time.sleep(REFRESH_RATE_SECS)
         except (KeyboardInterrupt, SystemExit):
