@@ -86,16 +86,16 @@ class SolarLights:
         pixels = []
         methods = []
         if self.is_daylight:
-            methods.append(
+            methods.extend([
+                self.get_indicator_pixels,
+                self.get_tilt_pixels,
                 partial(self.get_production_percent_pixels, multi=3),
-            )
+            ])
         else:
-            methods.append(
+            methods.extend([
                 self.get_day_summary_pixels
-            )
+            ])
         methods.extend([
-            self.get_indicator_pixels,
-            self.get_tilt_pixels,
             partial(self.get_consumption_percent_pixels, multi=3),
         ])
         for method in methods:
@@ -499,26 +499,27 @@ class SolarLights:
 
     def get_day_summary_pixels(self):
         """Summarise the day - more export or more self consumption?."""
+        n_pix = 5
         if self._summary is None:
-            return [self.DARK_PIXEL] * 3
+            return [self.DARK_PIXEL] * n_pix
 
         total_prod = self._summary['FeedIn'] + self._summary['SelfConsumption']
         pct_self = self._summary['SelfConsumption'] / total_prod
         pct_export = self._summary['FeedIn'] / total_prod
 
         result = []
-        if pct_self > 0.33:
+        pct_per_pix = 1.0 / n_pix
+        calcd = 0
+        while (calcd + pct_per_pix) <= pct_self:
             result.append(NEUTRAL_COLOUR)
-        if pct_self > 0.66:
-            result.append(NEUTRAL_COLOUR)
+            calcd += pct_per_pix
 
         result.append(
             self.blend_pixel(EXPORT_COLOUR, NEUTRAL_COLOUR, pct_self)
         )
+        calcd += pct_per_pix
 
-        if pct_export > 0.33:
-            result.append(EXPORT_COLOUR)
-        if pct_export > 0.66:
+        while (calcd + pct_per_pix) <= 1:
             result.append(EXPORT_COLOUR)
 
         return result
