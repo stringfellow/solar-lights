@@ -562,12 +562,21 @@ if __name__ == '__main__':
         default=False,
         help="Don't do a render with Blinkt"
     )
+    parser.add_argument(
+        '-w', '--wait', action="store", type=int,
+        help="Wait n seconds before starting ("
+        "helps with clock/connection issues)"
+    )
     args = parser.parse_args()
     controller = SolarLights(
         with_blinkt=not args.no_blinkt,
         with_pygame=args.with_pygame
     )
     interrupted = False
+    if args.wait:
+        LOG.info(f'Waiting {args.wait} seconds before starting...')
+        time.sleep(int(args.wait))
+
     while not interrupted:
         try:
             controller.run()
