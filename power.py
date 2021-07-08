@@ -2,6 +2,8 @@ import argparse
 import logging
 import time
 import random
+import signal
+import sys
 from datetime import datetime, timedelta
 from functools import partial
 
@@ -568,21 +570,28 @@ if __name__ == '__main__':
         "helps with clock/connection issues)"
     )
     args = parser.parse_args()
-    controller = SolarLights(
-        with_blinkt=not args.no_blinkt,
-        with_pygame=args.with_pygame
-    )
-    interrupted = False
     if args.wait:
         LOG.info(f'Waiting {args.wait} seconds before starting...')
         time.sleep(int(args.wait))
 
+    controller = SolarLights(
+        with_blinkt=not args.no_blinkt,
+        with_pygame=args.with_pygame
+    )
+
+    def signal_term_handler(signal, frame):
+        """Handle exit gracefully..."""
+        LOG.info(f"Got signal {signal}, aborting...")
+        sys.exit(0)
+    signal.signal(signal.SIGTERM, signal_term_handler)
+
+    interrupted = False
     while not interrupted:
         try:
             controller.run()
         except (KeyboardInterrupt, SystemExit):
             interrupted = True
-            LOG.info("Keyboard interrupt/sys exit, aborting.")
             controller.cleanup()
+            LOG.info("..cleanup on abort done.")
         except:
             LOG.exception("Exception occurred, retrying run loop.")
