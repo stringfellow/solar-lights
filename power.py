@@ -60,6 +60,7 @@ class SolarLights:
         self._with_blink = with_blinkt
         self._with_pygame = with_pygame
         self._render_count = 0
+        self._running = True
 
         self._pygame_display = None
 
@@ -388,6 +389,10 @@ class SolarLights:
                     (ix * 50, 0, 50, 50)
                 )
             pygame.display.update()
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    self.cleanup()
         except Exception as ex:
             raise RenderMethodFailed(f"Pygame render failed... {ex}")
 
@@ -529,20 +534,19 @@ class SolarLights:
 
     def run(self):
         """Start the process."""
-        try:
+        self.set_next_update()
+        while self._running:
+            self.update_data()
             self.set_next_update()
-            while True:
-                self.update_data()
-                self.set_next_update()
-                pixels = self.get_pixels()
-                self.set_pixels(pixels, 0, clear=True)
-                self.render()
-                time.sleep(REFRESH_RATE_SECS)
-        except (KeyboardInterrupt, SystemExit):
-            raise
+            pixels = self.get_pixels()
+            self.set_pixels(pixels, 0, clear=True)
+            self.render()
+            time.sleep(REFRESH_RATE_SECS)
+        return self._running
 
     def cleanup(self):
         """Clear any states..."""
+        self._running = False
         if self._with_blink:
             try:
                 from blinkt import clear, show
@@ -588,10 +592,11 @@ if __name__ == '__main__':
     interrupted = False
     while not interrupted:
         try:
-            controller.run()
+            interrupted = not controller.run()
         except (KeyboardInterrupt, SystemExit):
             interrupted = True
-            controller.cleanup()
-            LOG.info("..cleanup on abort done.")
         except:
             LOG.exception("Exception occurred, retrying run loop.")
+        finally:
+            controller.cleanup()
+            LOG.info("..cleanup on abort done.")
