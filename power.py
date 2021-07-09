@@ -11,7 +11,12 @@ import requests
 from astral import LocationInfo
 from astral.sun import sun
 
-from config import API_KEY, SITE_ID
+from config import (
+    API_KEY, SITE_ID,
+    IMPORT_COLOUR, EXPORT_COLOUR, NEUTRAL_COLOUR,
+    REFRESH_RATE_SECS,
+    CAPACITY, MAX_IDEAL_POWER, MAX_IDEAL_CONSUMPTION
+)
 
 LOG = logging.getLogger('solar-lights')
 logging.basicConfig(
@@ -20,19 +25,8 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-
-IMPORT_COLOUR = [255, 0, 0]  # Bright RED  (worst is import!)
-EXPORT_COLOUR = [0, 0, 255]  # Bright BLUE
-NEUTRAL_COLOUR = [0, 255, 0]  # Bright GREEN  (best is self-consumption)
-
-# Get the following from the API?
-CAPACITY = 2.97  # kWp - capacity of the PV system installed
-MAX_IDEAL_POWER = 3.  # kW - daily usage at SITE_ID
-
 SOLAREDGE_SITE_API = f"https://monitoringapi.solaredge.com/site/{SITE_ID}/"
 API_QUERY_LIMIT = 300
-
-REFRESH_RATE_SECS = 0.1
 
 
 class DataMethodNotAvailable(Exception):
@@ -89,18 +83,17 @@ class SolarLights:
         pixels = []
         methods = []
         if self.is_daylight:
-            methods.extend([
+            methods = [
+                partial(self.get_production_percent_pixels, multi=3),
                 self.get_indicator_pixels,
                 self.get_tilt_pixels,
-                partial(self.get_production_percent_pixels, multi=3),
-            ])
+                partial(self.get_consumption_percent_pixels, multi=3),
+            ]
         else:
-            methods.extend([
-                self.get_day_summary_pixels
-            ])
-        methods.extend([
-            partial(self.get_consumption_percent_pixels, multi=3),
-        ])
+            methods = [
+                partial(self.get_day_summary_pixels, multi=7),
+                self.get_consumption_percent_pixels,
+            ]
         for method in methods:
             pixels.extend(method())
         return pixels
@@ -347,11 +340,12 @@ class SolarLights:
             <body style="background-color: black; color: white;">
             <script>
             window.setTimeout(function(){window.location=location.href}, """ +
-            str(REFRESH_RATE_SECS * 5000) + """);
+            str(REFRESH_RATE_SECS * 15000) + """);
             </script>
             """ + pixel_markup +
             f"<p>Date: {datetime.utcnow().isoformat()}</p>" +
             f"<p>Data: {self._data}</p>" +
+            f"<p>Summary: {self._summary}</p>" +
             f"<p>Pixels: {self.pixels}</p>"
             "</body></html>")
 
@@ -463,7 +457,7 @@ class SolarLights:
     def spread_pixels(self, n_pixels: int, full_pixel: list, pct: float):
         """Spread the full_pixel over n_pixels."""
         result = []
-        pix_pct = 1 / n_pixels
+        pix_pct = max([0.001, 1. / float(n_pixels)])
 
         for _ in range(int(n_pixels)):
             if pct >= pix_pct:
@@ -482,7 +476,7 @@ class SolarLights:
     def get_production_percent_pixels(self, multi: float=0) -> list:
         """Return colour for how 'well' the system is doing relative to capacity."""
         prod = self._data['production']
-        pct = prod / CAPACITY  # 0
+        pct = prod / CAPACITY
         result = []
 
         pct = pct * self.pulse_percent
@@ -495,7 +489,7 @@ class SolarLights:
     def get_consumption_percent_pixels(self, multi: float=0) -> list:
         """Return colour for how 'bad' consumption is relative to... avg?..."""
         cons = self._data['consumption']
-        pct = cons / MAX_IDEAL_POWER
+        pct = min([cons / MAX_IDEAL_POWER, 1.])
         result = []
         pct = pct * self.pulse_percent
         if multi:
@@ -504,18 +498,26 @@ class SolarLights:
             result.append([round(255. * pct), 0, 0])
         return reversed(result)
 
-    def get_day_summary_pixels(self):
+    def get_day_summary_pixels(self, multi=3):
         """Summarise the day - more export or more self consumption?."""
-        n_pix = 5
         if self._summary is None:
-            return [self.DARK_PIXEL] * n_pix
+            return [self.DARK_PIXEL] * multi
 
         total_prod = self._summary['FeedIn'] + self._summary['SelfConsumption']
-        pct_self = self._summary['SelfConsumption'] / total_prod
-        pct_export = self._summary['FeedIn'] / total_prod
+        try:
+            pct_self = self._summary['SelfConsumption'] / total_prod
+            pct_export = self._summary['FeedIn'] / total_prod
+        except ZeroDivisionError:
+            # No production at all... return red?
+            day_cons = self._summary['Consumption']
+            day_goodness = min([
+                day_cons / 1000. / float(MAX_IDEAL_CONSUMPTION),
+                1.
+            ]) * self.pulse_percent
+            return self.spread_pixels(multi, IMPORT_COLOUR, day_goodness)
 
         result = []
-        pct_per_pix = 1.0 / n_pix
+        pct_per_pix = 1.0 / float(multi)
         calcd = 0
         while (calcd + pct_per_pix) <= pct_self:
             result.append(NEUTRAL_COLOUR)
