@@ -1,10 +1,12 @@
-import unittest
+from unittest import TestCase
+from unittest.mock import patch, PropertyMock
+
 
 from parameterized import parameterized
 
-from power import get_production_percent_pixels
+from power import SolarLights
 
-class TestPixels(unittest.TestCase):
+class TestPixels(TestCase):
     """Test pixel production."""
 
     @parameterized.expand([
@@ -17,7 +19,14 @@ class TestPixels(unittest.TestCase):
     ])
     def test_multi_pixel_split(self, prod, result):
         """Should split into multi pixels."""
-        pixels = get_production_percent_pixels({
-            'production': prod,
-        }, multi=True)
-        self.assertEqual(pixels, result)
+        pulse = PropertyMock(return_value=1)
+        with patch(
+            'power.PRODUCTION_COLOUR', [255, 255, 255]
+        ):
+            sl = SolarLights()
+            type(sl).pulse_percent = pulse
+            sl._data = {
+                'production': prod
+            }
+            pixels = sl.get_production_percent_pixels(multi=3)
+            self.assertEqual(pixels, result)

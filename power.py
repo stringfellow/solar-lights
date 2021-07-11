@@ -13,9 +13,9 @@ from astral.sun import sun
 
 from config import (
     API_KEY, SITE_ID,
-    IMPORT_COLOUR, EXPORT_COLOUR, NEUTRAL_COLOUR,
+    IMPORT_COLOUR, EXPORT_COLOUR, NEUTRAL_COLOUR, PRODUCTION_COLOUR,
     REFRESH_RATE_SECS,
-    CAPACITY, MAX_IDEAL_POWER, MAX_IDEAL_CONSUMPTION
+    CAPACITY, MAX_IDEAL_POWER, MAX_IDEAL_CONSUMPTION,
 )
 
 LOG = logging.getLogger('solar-lights')
@@ -490,9 +490,9 @@ class SolarLights:
 
         pct = pct * self.pulse_percent
         if multi:
-            result = self.spread_pixels(multi, [128, 128, 128], pct)
+            result = self.spread_pixels(multi, PRODUCTION_COLOUR, pct)
         else:
-            result.append([round(128. * pct)] * 3)
+            result.append([val * pct for val in PRODUCTION_COLOUR])
         return result
 
     def get_consumption_percent_pixels(self, multi: float=0) -> list:
