@@ -110,7 +110,11 @@ class SolarLights:
     @property
     def sun_params(self):
         """Return sun params for this place."""
-        if self._sun_params is None:
+        get_new_params = (
+            self._sun_params is None or
+            self._sun_params['sunset'].day < datetime.now().day
+        )
+        if get_new_params:
             self._sun_params = sun(self.city.observer, datetime.now())
         return self._sun_params
 
