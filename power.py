@@ -442,12 +442,17 @@ class SolarLights:
         all_imp = IMPORT_COLOUR
         all_exp = EXPORT_COLOUR
         all_cons = NEUTRAL_COLOUR
-        pct = grid / cons
 
         c1 = all_cons
-        c2 = all_exp if prod > cons else all_imp
 
-        return [self.blend_pixel(c1, c2, pct)]
+        pct = grid / cons
+        c2 = all_imp
+        if prod > cons:
+            pct = cons / prod
+            c2 = all_exp
+
+        pixel = self.blend_pixel(c2, c1, pct)
+        return [pixel]
 
     def blend_pixel(self, c1, c2, pct):
         """Simple blend from c1 to c2 by pct."""
