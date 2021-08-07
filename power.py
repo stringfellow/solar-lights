@@ -448,10 +448,10 @@ class SolarLights:
         pct = grid / cons
         c2 = all_imp
         if prod > cons:
-            pct = cons / prod
+            pct = grid / prod
             c2 = all_exp
 
-        pixel = self.blend_pixel(c2, c1, pct)
+        pixel = self.blend_pixel(c1, c2, pct)
         return [pixel]
 
     def blend_pixel(self, c1, c2, pct):
