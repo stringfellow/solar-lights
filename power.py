@@ -15,7 +15,7 @@ from config import (
     API_KEY, SITE_ID,
     IMPORT_COLOUR, EXPORT_COLOUR, NEUTRAL_COLOUR, PRODUCTION_COLOUR,
     REFRESH_RATE_SECS,
-    CAPACITY, MAX_IDEAL_POWER, MAX_IDEAL_CONSUMPTION,
+    CAPACITY, MAX_IDEAL_POWER, MAX_IDEAL_CONSUMPTION, DIM_DOWN_TIME,
 )
 
 LOG = logging.getLogger('solar-lights')
@@ -361,7 +361,7 @@ class SolarLights:
         try:
             from blinkt import clear, set_pixel, show, set_brightness
             clear()
-            set_brightness(0.5 if self.is_daylight else 0.1)
+            set_brightness(0.5 if self.is_daylight else 0.05)
             for ix in range(len(self.pixels)):
                 set_pixel(ix, *self.pixels[ix])
             show()
@@ -541,7 +541,16 @@ class SolarLights:
             result.append(EXPORT_COLOUR)
             calcd += pct_per_pix
 
-        return result
+        dim_down = datetime.now().time().strftime("%H:%m:%S") >= DIM_DOWN_TIME
+        dim = 0.01 if dim_down else 1
+
+        return [
+            [
+                red * dim, 
+                green * dim, 
+                blue * dim
+            ] for red, green, blue in result
+        ]
 
     def run(self):
         """Start the process."""
