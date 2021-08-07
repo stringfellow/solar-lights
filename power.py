@@ -15,7 +15,8 @@ from config import (
     API_KEY, SITE_ID,
     IMPORT_COLOUR, EXPORT_COLOUR, NEUTRAL_COLOUR, PRODUCTION_COLOUR,
     REFRESH_RATE_SECS,
-    CAPACITY, MAX_IDEAL_POWER, MAX_IDEAL_CONSUMPTION, DIM_DOWN_TIME,
+    CAPACITY, MAX_IDEAL_POWER, MAX_IDEAL_CONSUMPTION,
+    DIM_DOWN_TIME_NIGHT, BRIGHTEN_UP_TIME_MORNING,
 )
 
 LOG = logging.getLogger('solar-lights')
@@ -123,6 +124,14 @@ class SolarLights:
         return (
             self.sun_params['sunset'] - self.sun_params['sunrise']
         ).total_seconds()
+
+    @property
+    def should_dim(self):
+        """Return if it is in the dim-down time range."""
+        now_time = datetime.now().time().strftime("%H:%M:%S")
+        dim_down_night = DIM_DOWN_TIME_NIGHT <= now_time
+        dim_down_morn = now_time <= BRIGHTEN_UP_TIME_MORNING
+        return dim_down_night or dim_down_morn
 
     @property
     def is_daylight(self):
@@ -362,8 +371,10 @@ class SolarLights:
             from blinkt import clear, set_pixel, show, set_brightness
             clear()
             set_brightness(0.5 if self.is_daylight else 0.05)
+
+            dim = 0.01 if self.should_dim else 1
             for ix in range(len(self.pixels)):
-                set_pixel(ix, *self.pixels[ix])
+                set_pixel(ix, *[int(val * dim) for val in self.pixels[ix]])
             show()
         except ImportError:
             raise RenderMethodFailed("No blinkt!")
@@ -541,16 +552,7 @@ class SolarLights:
             result.append(EXPORT_COLOUR)
             calcd += pct_per_pix
 
-        dim_down = datetime.now().time().strftime("%H:%m:%S") >= DIM_DOWN_TIME
-        dim = 0.01 if dim_down else 1
-
-        return [
-            [
-                red * dim, 
-                green * dim, 
-                blue * dim
-            ] for red, green, blue in result
-        ]
+        return result
 
     def run(self):
         """Start the process."""
