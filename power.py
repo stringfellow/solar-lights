@@ -17,6 +17,7 @@ from config import (
     REFRESH_RATE_SECS,
     CAPACITY, MAX_IDEAL_POWER, MAX_IDEAL_CONSUMPTION,
     DIM_DOWN_TIME_NIGHT, BRIGHTEN_UP_TIME_MORNING,
+    OFF_TIMES, OFF_TIME_NIGHT, ON_TIME_MORNING
 )
 
 LOG = logging.getLogger('solar-lights')
@@ -124,6 +125,14 @@ class SolarLights:
         return (
             self.sun_params['sunset'] - self.sun_params['sunrise']
         ).total_seconds()
+
+    @property
+    def should_off(self):
+        """Return trun within, if we have an off period set."""
+        now_time = datetime.now().time().strftime("%H:%M:%S")
+        off_down_night = OFF_TIMES and OFF_TIME_NIGHT <= now_time
+        off_down_morn = OFF_TIMES and now_time <= ON_TIME_MORNING
+        return off_down_night or off_down_morn
 
     @property
     def should_dim(self):
@@ -373,8 +382,12 @@ class SolarLights:
             set_brightness(0.5 if self.is_daylight else 0.05)
 
             dim = 0.01 if self.should_dim else 1
+            off = 0 if self.should_off else 1
             for ix in range(len(self.pixels)):
-                set_pixel(ix, *[int(val * dim) for val in self.pixels[ix]])
+                set_pixel(
+                    ix,
+                    *[int(val * dim * off) for val in self.pixels[ix]]
+                )
             show()
         except ImportError:
             raise RenderMethodFailed("No blinkt!")
