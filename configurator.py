@@ -1,3 +1,4 @@
+import os
 from importlib import reload
 
 from flask import Flask, render_template, request, redirect
@@ -32,6 +33,7 @@ def _rewrite_config_file():
 
     return redirect("/?updated=1", code=302)
 
+
 @app.route("/", methods=['GET', 'POST'])
 def update_config():
     """Show form and update config."""
@@ -48,3 +50,10 @@ def update_config():
     context.update(request.args)
 
     return render_template('home.jinja2', **context)
+
+
+@app.route('/reboot', methods=['POST'])
+def reboot():
+    """Restart the service."""
+    os.system('sudo reboot')
+    return '<html><body><h1>Byeee!</h1></body></html>'
