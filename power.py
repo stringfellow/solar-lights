@@ -126,6 +126,17 @@ class SolarLights:
             self.sun_params['sunset'] - self.sun_params['sunrise']
         ).total_seconds()
 
+    def get_on_seconds(self):
+        """Return number of seconds we are actually displaying for."""
+        off_parts = OFF_TIME_NIGHT.split(':')
+        on_parts = ON_TIME_MORNING.split(':')
+
+        return (
+            ((int(off_parts[0]) - int(on_parts[0])) * 60 * 60)  # hours
+            + ((int(off_parts[1]) - int(on_parts[1])) % 60 * 60)  # mins
+            + ((int(off_parts[2]) - int(on_parts[2])) % 60)  # secs
+        )
+
     @property
     def should_off(self):
         """Return trun within, if we have an off period set."""
@@ -309,7 +320,8 @@ class SolarLights:
             return
 
         light_secs = self.get_daylight_seconds()
-        dark_secs = 60 * 60 * 24 - light_secs
+        on_time_secs = self.get_on_seconds()
+        dark_secs = on_time_secs - light_secs
         day_portion = int(API_QUERY_LIMIT * 0.95)
         # Night portion is -2: one for Summary request, and one for safety...
         night_portion = API_QUERY_LIMIT - day_portion - 2
