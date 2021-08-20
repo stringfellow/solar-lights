@@ -114,7 +114,7 @@
           </div>
           <div class="col-12">
             <div class="mb-3">
-              <div><label for="production_colour" class="form-label">'Production' colour</label></div>
+              <div><label for="production_colour" class="form-label">Production colour</label></div>
               <div class="input-group">
                 <span class="input-group-text">R</span>
                 <input
@@ -140,6 +140,34 @@
                 <span class="input-group-text" data-colour-patch></span>
               </div>
               <div id="production_colour_help" class="form-text">Colour to use for PV production (e.g. white)</div>
+            </div>
+            <div class="mb-3">
+              <div><label for="consumption_colour" class="form-label">Consumption colour</label></div>
+              <div class="input-group">
+                <span class="input-group-text">R</span>
+                <input
+                  max="255" min="0" step="1"
+                  type="number" class="form-control" id="consumption_colour-r"
+                  name="CONSUMPTION_COLOUR-R"
+                  data-colour-group="consumption"
+                  value="{{ CONSUMPTION_COLOUR[0] }}">
+                <span class="input-group-text">G</span>
+                <input
+                  max="255" min="0" step="1"
+                  type="number" class="form-control" id="consumption_colour-g"
+                  name="CONSUMPTION_COLOUR-G"
+                  data-colour-group="consumption"
+                  value="{{ CONSUMPTION_COLOUR[1] }}">
+                <span class="input-group-text">B</span>
+                <input
+                  max="255" min="0" step="1"
+                  type="number" class="form-control" id="consumption_colour-b"
+                  name="CONSUMPTION_COLOUR-B"
+                  data-colour-group="consumption"
+                  value="{{ CONSUMPTION_COLOUR[2] }}">
+                <span class="input-group-text" data-colour-patch></span>
+              </div>
+              <div id="consumption_colour_help" class="form-text">Colour to use for energy use (e.g. magenta)</div>
             </div>
             <div class="mb-3">
               <div><label for="import_colour" class="form-label">'Import' colour</label></div>

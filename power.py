@@ -14,6 +14,7 @@ from astral.sun import sun
 from config import (
     API_KEY, SITE_ID,
     IMPORT_COLOUR, EXPORT_COLOUR, NEUTRAL_COLOUR, PRODUCTION_COLOUR,
+    CONSUMPTION_COLOUR,
     REFRESH_RATE_SECS,
     CAPACITY, MAX_IDEAL_POWER, MAX_IDEAL_CONSUMPTION,
     DIM_DOWN_TIME_NIGHT, BRIGHTEN_UP_TIME_MORNING,
@@ -538,9 +539,9 @@ class SolarLights:
         result = []
         pct = pct * self.pulse_percent
         if multi:
-            result = self.spread_pixels(multi, [128, 0, 0], pct)
+            result = self.spread_pixels(multi, CONSUMPTION_COLOUR, pct)
         else:
-            result.append([round(255. * pct), 0, 0])
+            result.append([round(col * pct) for col in CONSUMPTION_COLOUR])
         return reversed(result)
 
     def get_day_summary_pixels(self, multi=3):
