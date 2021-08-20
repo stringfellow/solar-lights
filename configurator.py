@@ -56,4 +56,4 @@ def update_config():
 def reboot():
     """Restart the service."""
     os.system('sudo reboot')
-    return '<html><body><h1>Byeee!</h1></body></html>'
+    return render_template('rebooting.jinja2')
