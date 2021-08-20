@@ -128,13 +128,13 @@ class SolarLights:
 
     def get_on_seconds(self):
         """Return number of seconds we are actually displaying for."""
-        off_parts = OFF_TIME_NIGHT.split(':')
-        on_parts = ON_TIME_MORNING.split(':')
+        off_parts = [int(part) for part in OFF_TIME_NIGHT.split(':')]
+        on_parts = [int(part) for part in ON_TIME_MORNING.split(':')]
 
         return (
-            ((int(off_parts[0]) - int(on_parts[0])) * 60 * 60)  # hours
-            + ((int(off_parts[1]) - int(on_parts[1])) % 60 * 60)  # mins
-            + ((int(off_parts[2]) - int(on_parts[2])) % 60)  # secs
+            ((off_parts[0] - on_parts[0]) % 24 * 60 * 60) +  # hours
+            ((off_parts[1] - on_parts[1]) % 60 * 60) +  # mins
+            ((off_parts[2] - on_parts[2]) % 60)  # secs
         )
 
     @property
