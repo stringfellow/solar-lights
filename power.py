@@ -46,7 +46,10 @@ class SolarLights:
     PIXELS_AVAILABLE = 8
     DARK_PIXEL = [0, 0, 0]
 
-    def __init__(self, with_blinkt=True, with_pygame=False):
+    def __init__(
+        self, with_blinkt=True, with_pygame=False,
+        with_csv=False, with_modbus=False, with_solaredge=True, with_mock=False
+    ):
         """Set up."""
         self._data = None
         self._summary = None
@@ -57,9 +60,16 @@ class SolarLights:
         self._with_blink = with_blinkt
         self._with_pygame = with_pygame
         self._render_count = 0
+        self._flash_max_renders = 15
+        self._pulse_max_renders = 127
         self._running = True
+        self.with_csv = with_csv
+        self.with_modbus = with_modbus
+        self.with_solaredge = with_solaredge
+        self.with_mock = with_mock
 
         self._pygame_display = None
+        self.help = []
 
     @property
     def pixels(self):
@@ -82,9 +92,10 @@ class SolarLights:
                 self._pixels[ix] = pixels.pop()
 
     def get_pixels(self):
-        """Return a load of pixels to render."""
+        """Return a load of pixels to render. Side-effect, sets help array."""
         pixels = []
         methods = []
+        self.help = []
         if self.is_daylight:
             methods = [
                 partial(self.get_production_percent_pixels, multi=3),
@@ -295,12 +306,15 @@ class SolarLights:
     def get_live_power_with_status(self):
         """Get power/status dict."""
         result = None
-        methods = [
-            self.get_modbus_power_with_status,
-            self.get_solaredge_power_with_status,
-            self.get_static_power_from_csv,
-            self.get_mock_power_with_status,
-        ]
+        methods = []
+        if self.with_modbus:
+            methods.append(self.get_modbus_power_with_status)
+        if self.with_solaredge:
+            methods.append(self.get_solaredge_power_with_status)
+        if self.with_csv:
+            methods.append(self.get_static_power_from_csv)
+        if self.with_mock:
+            methods.append(self.get_mock_power_with_status)
         methods.reverse()
         while result is None and len(methods):
             method = methods.pop()
@@ -311,15 +325,8 @@ class SolarLights:
         LOG.debug("Data updated!")
         return result
 
-    def set_next_update(self):
-        """Figure out when we can next update, set it."""
-        if self._next_update and self._next_update > datetime.utcnow():
-            return
-
-        if self._next_update is None:
-            self._next_update = datetime.utcnow().replace(microsecond=0)
-            return
-
+    def get_refresh_interval(self):
+        """Return number of seconds to wait for refresh."""
         light_secs = self.get_daylight_seconds()
         on_time_secs = self.get_on_seconds()
         dark_secs = on_time_secs - light_secs
@@ -333,6 +340,19 @@ class SolarLights:
             refresh = refresh_day
         else:
             refresh = refresh_night
+        return refresh
+
+    def set_next_update(self):
+        """Figure out when we can next update, set it."""
+        if self._next_update and self._next_update > datetime.utcnow():
+            return
+
+        if self._next_update is None:
+            self._next_update = datetime.utcnow().replace(microsecond=0)
+            return
+
+        refresh = self.get_refresh_interval()
+
         self._next_update = (
             datetime.utcnow() + timedelta(seconds=refresh)
         ).replace(microsecond=0)
@@ -347,6 +367,11 @@ class SolarLights:
             LOG.debug("Updating data...")
             self._data = self.get_live_power_with_status()
             LOG.debug(f"Data: {self._data}")
+            with open('data.csv', 'w') as fp:
+                fp.write('prod,cons\n')
+                fp.write(
+                    f'{self._data["production"]},{self._data["consumption"]}\n'
+                )
 
             if self.is_daylight:
                 self._summary = None
@@ -434,14 +459,14 @@ class SolarLights:
     @property
     def flash_percent(self):
         """Return percent of flash depending on render count."""
-        max_ = 15.
-        return (self._render_count % max_) / max_
+        max_ = float(self._pulse_max_renders)
+        return (self._render_count % max_ + 1) / max_
 
     @property
     def pulse_percent(self):
         """Return percent of pulse depending on render count."""
-        max_ = 127.
-        return (self._render_count % max_) / max_
+        max_ = float(self._pulse_max_renders)
+        return (self._render_count % max_ + 1) / max_
 
     def render(self):
         """Render somehow (HTML, Blinkt, etc.)."""
@@ -459,6 +484,12 @@ class SolarLights:
 
     def get_indicator_pixels(self):
         """Return pixel colour for "trinary" directional indicator."""
+        self.help.append((
+            'Indicator',
+            'Direction indicator - either import, export or balanced '
+            'self-consumption',
+            1
+        ))
         pct = self.flash_percent if self.is_daylight else 1
         return [
             [
@@ -472,6 +503,17 @@ class SolarLights:
 
     def get_tilt_pixels(self):
         """Return pixel colour for the "tilt" toward export/import/balance."""
+        self.help.append((
+            'Tilt',
+            '(Flashing) This shows the "tilt" away from balanced '
+            'self-consumption, if the direction '
+            'indicator shows import or export and this light is closer in '
+            'colour to the direction indicator light than the self-consumption '
+            'colour, then you are mostly importing or exporting, if it is '
+            'closer to the self-consumption colour then you\'re mostly '
+            'self-consuming!',
+            1
+        ))
         grid = self._data['grid']
         cons = self._data['consumption']
         prod = self._data['production']
@@ -521,6 +563,11 @@ class SolarLights:
 
     def get_production_percent_pixels(self, multi: float=0) -> list:
         """Return colour for how 'well' the system is doing relative to capacity."""
+        self.help.append((
+            'Production',
+            f'Production - if fully lit, represents at least {CAPACITY} kWp',
+            multi or 1
+        ))
         prod = self._data['production']
         pct = prod / CAPACITY
         result = []
@@ -534,6 +581,12 @@ class SolarLights:
 
     def get_consumption_percent_pixels(self, multi: float=0) -> list:
         """Return colour for how 'bad' consumption is relative to... avg?..."""
+        self.help.append((
+            'Consumption',
+            f'Energy use - if fully lit, represents at least {MAX_IDEAL_POWER}'
+            ' kW usage (consumption)',
+            multi or 1
+        ))
         cons = self._data['consumption']
         pct = min([cons / MAX_IDEAL_POWER, 1.])
         result = []
@@ -546,6 +599,12 @@ class SolarLights:
 
     def get_day_summary_pixels(self, multi=3):
         """Summarise the day - more export or more self consumption?."""
+        self.help.append((
+            'Day summary',
+            f'Day summary - shows a percentage split between export and self-'
+            'consumption',
+            multi or 1
+        ))
         if self._summary is None:
             return [self.DARK_PIXEL] * multi
 
