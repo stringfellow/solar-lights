@@ -37,7 +37,7 @@
 <div class="container">
   <div class="row">
     <div class="col">
-      <h1 class="py-3">Pi in the Sky</h1>
+      <h1 class="py-3">🌞 Pi in the Sky</h1>
       {% if updated and updated == '1' %}
       <div class="alert alert-success">
         <div class="d-flex align-items-center">
@@ -457,6 +457,7 @@ var updateLightsAndHelp = function() {
     setTimeout(updateLightsAndHelp, Math.round(data.refresh * 1000 / 2));
   })
   .fail(function() {
+    setTimeout(updateLightsAndHelp, 5000);
   })
   .always(function() {
   });
